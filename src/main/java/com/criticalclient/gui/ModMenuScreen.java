@@ -10,12 +10,18 @@ import com.criticalclient.util.Input;
 import com.criticalclient.util.Sounds;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/** The Critical Client module menu. Opens with Right Shift. */
+/**
+ * Critical Client module menu (Right Shift).
+ * Clicks use Minecraft's real screen events. Every clickable thing registers a "hit box"
+ * while it is drawn, so what you see is exactly what you can click.
+ */
 public class ModMenuScreen extends Screen {
 	private static final long OPEN_NS = 300_000_000L, CLOSE_NS = 190_000_000L, STAGGER_NS = 30_000_000L, CARD_IN_NS = 280_000_000L;
 	private static final int GAP = 8, CARD_H = 52, MIN_CARD_W = 134, R = 12;
@@ -23,10 +29,26 @@ public class ModMenuScreen extends Screen {
 	private static final Category[] TAB_CATS = {null, Category.VISUALS, Category.HUD, Category.MOVEMENT};
 	private static final int WHITE = 0xFFFFFFFF;
 
+	/** A clickable rectangle, optionally clipped (cards are clipped to the scroll area). */
+	private static final class Hit {
+		final int x, y, w, h, clipX, clipY, clipW, clipH;
+		final Runnable action;
+		Hit(int x, int y, int w, int h, int clipX, int clipY, int clipW, int clipH, Runnable action) {
+			this.x = x; this.y = y; this.w = w; this.h = h;
+			this.clipX = clipX; this.clipY = clipY; this.clipW = clipW; this.clipH = clipH; this.action = action;
+		}
+		boolean contains(double mx, double my) {
+			return mx >= x && mx < x + w && my >= y && my < y + h
+				&& mx >= clipX && mx < clipX + clipW && my >= clipY && my < clipY + clipH;
+		}
+	}
+
+	private final List<Hit> hits = new ArrayList<>();
 	private long openedAt, closeAt, lastFrame, tabChangedAt;
-	private boolean closing, inputInit, prevMouse, prevShift;
+	private boolean closing;
 	private int tab = 0;
 	private float tabY = -1, scroll, scrollTarget, closeHover, bulkHover;
+	private float lastScale = 1f, lastOffY = 0f, lastP = 0f;
 
 	private int px, py, pw, ph, sideW, cx, cy, cw, ch, cols, cardW;
 
@@ -40,6 +62,42 @@ public class ModMenuScreen extends Screen {
 		if (!closing) { closing = true; closeAt = System.nanoTime(); Sounds.close(); ModuleManager.save(); }
 	}
 
+	// ------------------------------------------------------------------ input
+	private boolean handleClick(double sx, double sy) {
+		if (closing || lastP < 0.6f) return false;
+		double pcx = width / 2.0, pcy = height / 2.0;
+		double lx = pcx + (sx - pcx) / lastScale;
+		double ly = pcy + (sy - (pcy + lastOffY)) / lastScale;
+		for (int i = hits.size() - 1; i >= 0; i--) {
+			Hit h = hits.get(i);
+			if (h.contains(lx, ly)) { h.action.run(); return true; }
+		}
+		return false;
+	}
+
+	@Override
+	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+		if (event.button() == 0 && handleClick(event.x(), event.y())) return true;
+		return super.mouseClicked(event, doubleClick);
+	}
+
+	@Override
+	public boolean keyPressed(KeyEvent event) {
+		// Right Shift closes (ignore the first moment so the key that opened the menu can't close it again)
+		if (event.key() == Input.KEY_RIGHT_SHIFT && openedAt != 0 && System.nanoTime() - openedAt > 450_000_000L) {
+			onClose();
+			return true;
+		}
+		return super.keyPressed(event);
+	}
+
+	// no @Override: if the signature ever changes only wheel scrolling would stop
+	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+		scrollTarget -= (float) (scrollY * 30);
+		return true;
+	}
+
+	// ------------------------------------------------------------------ layout
 	private List<Module> visible() {
 		List<Module> out = new ArrayList<>();
 		for (Module m : ModuleManager.all()) if (TAB_CATS[tab] == null || m.category == TAB_CATS[tab]) out.add(m);
@@ -50,7 +108,7 @@ public class ModMenuScreen extends Screen {
 		pw = Math.min(width - 12, Math.max(340, Math.min(700, (int) (width * 0.82f))));
 		ph = Math.min(height - 12, Math.max(220, Math.min(380, (int) (height * 0.82f))));
 		px = (width - pw) / 2; py = (height - ph) / 2;
-		sideW = pw < 450 ? 96 : 122;
+		sideW = pw < 450 ? 96 : 124;
 		cx = px + sideW + 16; cy = py + 54;
 		cw = pw - sideW - 32; ch = ph - 54 - 14;
 		cols = Math.max(1, (cw + GAP) / (MIN_CARD_W + GAP));
@@ -61,6 +119,9 @@ public class ModMenuScreen extends Screen {
 		return mx >= x && mx < x + w && my >= y && my < y + h;
 	}
 
+	private void hit(int x, int y, int w, int h, Runnable r) { hits.add(new Hit(x, y, w, h, x, y, w, h, r)); }
+
+	// ------------------------------------------------------------------ render
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
@@ -69,20 +130,15 @@ public class ModMenuScreen extends Screen {
 		float dt = Math.min(0.1f, (now - lastFrame) / 1e9f);
 		lastFrame = now;
 		layout();
+		hits.clear();
 
 		float p = closing ? 1f - Anim.easeInCubic((now - closeAt) / (float) CLOSE_NS) : Anim.easeOutCubic((now - openedAt) / (float) OPEN_NS);
 		float scale = 0.94f + 0.06f * p, offY = 16f * (1f - p);
+		lastScale = scale; lastOffY = offY; lastP = p;
 		float pcx = width / 2f, pcy = height / 2f;
 		double mx = pcx + (mouseX - pcx) / scale;
 		double my = pcy + (mouseY - (pcy + offY)) / scale;
-		boolean interactive = !closing && p > 0.9f;
-
-		boolean down = Input.mouseLeftDown();
-		boolean shift = Input.keyDown(Input.KEY_RIGHT_SHIFT);
-		if (!inputInit) { prevMouse = down; prevShift = shift; inputInit = true; }
-		boolean clicked = down && !prevMouse;
-		if (shift && !prevShift) onClose();
-		prevMouse = down; prevShift = shift;
+		boolean live = !closing && p > 0.6f;
 
 		List<Module> mods = visible();
 		int rows = (mods.size() + cols - 1) / cols;
@@ -92,8 +148,6 @@ public class ModMenuScreen extends Screen {
 		scroll = Anim.approach(scroll, scrollTarget, 18f, dt);
 
 		Gfx g = new Gfx(graphics);
-
-		// backdrop
 		g.setAlpha(p);
 		g.gradientV(0, 0, width, height, 0x99000000, 0xDD1F060A);
 
@@ -102,7 +156,6 @@ public class ModMenuScreen extends Screen {
 		g.scale(scale);
 		g.translate(-pcx, -pcy);
 
-		// soft shadow, glowing red rim, panel
 		for (int i = 10; i >= 1; i--) g.round(px - i, py - i + 3, pw + i * 2, ph + i * 2, R + i, Colors.mulAlpha(0xFF000000, 0.045f));
 		g.round(px - 2, py - 2, pw + 4, ph + 4, R + 2, Colors.mulAlpha(Colors.ACCENT, 0.18f));
 		g.round(px - 1, py - 1, pw + 2, ph + 2, R + 1, Colors.ACCENT_DIM);
@@ -110,12 +163,11 @@ public class ModMenuScreen extends Screen {
 		g.round(px, py, sideW + R, ph, R, Colors.SIDEBAR);
 		g.rect(px + sideW, py, R, ph, Colors.PANEL);
 		g.rect(px + sideW, py + 12, 1, ph - 24, Colors.BORDER);
-		// header glow
 		g.gradientV(px + sideW + 1, py + R, pw - sideW - 2, 36, 0x26FF3B47, 0x00FF3B47);
 
-		drawSidebar(g, mx, my, dt, interactive, clicked);
-		drawHeader(g, mx, my, dt, interactive, clicked, mods);
-		drawCards(g, mods, mx, my, dt, now, interactive, clicked, maxScroll);
+		drawSidebar(g, mx, my, dt, live);
+		drawHeader(g, mx, my, dt, live, mods);
+		drawCards(g, mods, mx, my, dt, now, live, maxScroll);
 
 		g.pop();
 
@@ -129,8 +181,17 @@ public class ModMenuScreen extends Screen {
 		return n;
 	}
 
-	private void drawSidebar(Gfx g, double mx, double my, float dt, boolean interactive, boolean clicked) {
-		// logo block
+	/** Tiny 10x10 icons drawn from shapes. */
+	private void icon(Gfx g, int idx, int x, int y, int col, int bg) {
+		switch (idx) {
+			case 0 -> { g.round(x, y, 4, 4, 1, col); g.round(x + 6, y, 4, 4, 1, col); g.round(x, y + 6, 4, 4, 1, col); g.round(x + 6, y + 6, 4, 4, 1, col); }
+			case 1 -> { g.round(x, y + 2, 10, 6, 3, col); g.round(x + 3, y + 3, 4, 4, 2, bg); g.round(x + 4, y + 4, 2, 2, 1, col); }
+			case 2 -> { g.roundBordered(x, y + 1, 10, 8, 2, bg, col); g.rect(x + 2, y + 4, 6, 1, col); g.rect(x + 2, y + 6, 4, 1, col); }
+			default -> { g.rect(x, y + 4, 7, 2, col); g.rect(x + 6, y + 2, 2, 6, col); g.rect(x + 8, y + 3, 2, 4, col); }
+		}
+	}
+
+	private void drawSidebar(Gfx g, double mx, double my, float dt, boolean live) {
 		g.round(px + 8, py + 9, sideW - 16, 34, 8, 0xFF160D10);
 		g.image("textures/gui/icon.png", px + 12, py + 15, 22, 22, 64, 64);
 		int lw = sideW - 16 - 8 - 22 - 10;
@@ -139,60 +200,61 @@ public class ModMenuScreen extends Screen {
 
 		g.textScaled("MODULES", px + 12, py + 52, 0.8f, Colors.ACCENT_DIM, true);
 
-		int tx = px + 8, tw = sideW - 16, th = 24, ty0 = py + 66;
+		int tx = px + 8, tw = sideW - 16, th = 26, ty0 = py + 66;
 		float targetY = ty0 + tab * (th + 4);
 		tabY = tabY < 0 ? targetY : Anim.approach(tabY, targetY, 20f, dt);
 		int hy = Math.round(tabY);
 		g.round(tx, hy, tw, th, 7, 0xFF2B1418);
-		g.round(tx, hy + 5, 3, th - 10, 1, Colors.ACCENT);
+		g.round(tx, hy + 6, 3, th - 12, 1, Colors.ACCENT);
 		for (int i = 0; i < TAB_NAMES.length; i++) {
+			final int idx = i;
 			int y = ty0 + i * (th + 4);
-			boolean hov = interactive && in(mx, my, tx, y, tw, th);
+			boolean hov = live && in(mx, my, tx, y, tw, th);
 			boolean sel = i == tab;
+			if (hov && !sel) g.round(tx, y, tw, th, 7, 0xFF1A1013);
 			int col = sel ? Colors.TEXT : hov ? 0xFFDCCFD2 : Colors.TEXT_DIM;
-			g.text(TAB_NAMES[i], tx + 12, y + 8, col, sel);
+			icon(g, i, tx + 10, y + 8, sel ? Colors.ACCENT : col, sel ? 0xFF2B1418 : Colors.SIDEBAR);
+			g.text(TAB_NAMES[i], tx + 26, y + 9, col, sel);
 			String badge = tabCount(i, true) + "/" + tabCount(i, false);
-			g.textScaled(badge, tx + tw - 6 - g.width(badge, false) * 0.8f, y + 9, 0.8f, sel ? Colors.ACCENT : 0xFF6E6064, false);
-			if (hov && clicked && !sel) {
-				tab = i; scrollTarget = 0; scroll = 0; tabChangedAt = System.nanoTime(); Sounds.tab();
-			}
+			g.textScaled(badge, tx + tw - 6 - g.width(badge, false) * 0.8f, y + 10, 0.8f, sel ? Colors.ACCENT : 0xFF6E6064, false);
+			hit(tx, y, tw, th, () -> {
+				if (tab == idx) return;
+				tab = idx; scrollTarget = 0; scroll = 0; tabChangedAt = System.nanoTime(); Sounds.tab();
+			});
 		}
 		g.rect(px + 12, py + ph - 42, sideW - 24, 1, Colors.BORDER);
 		g.textScaled(ModuleManager.enabledCount() + " active", px + 12, py + ph - 34, 0.85f, Colors.TEXT, true);
 		g.textScaled("RSHIFT  close", px + 12, py + ph - 22, 0.8f, Colors.TEXT_DIM, false);
 	}
 
-	private void drawHeader(Gfx g, double mx, double my, float dt, boolean interactive, boolean clicked, List<Module> mods) {
+	private void drawHeader(Gfx g, double mx, double my, float dt, boolean live, List<Module> mods) {
 		String title = tab == 0 ? "All Modules" : TAB_NAMES[tab] + " Modules";
 		g.text(title, cx, py + 13, Colors.TEXT, true);
 		g.round(cx, py + 27, 22, 2, 1, Colors.ACCENT);
 		g.textScaled(mods.size() + (mods.size() == 1 ? " module" : " modules") + "  -  click a card to toggle", cx + 28, py + 26, 0.8f, Colors.TEXT_DIM, false);
 
-		// close button
 		int bs = 20, bx = px + pw - bs - 12, by = py + 11;
-		boolean hov = interactive && in(mx, my, bx, by, bs, bs);
+		boolean hov = live && in(mx, my, bx, by, bs, bs);
 		closeHover = Anim.approach(closeHover, hov ? 1f : 0f, 18f, dt);
 		g.round(bx, by, bs, bs, 6, Colors.lerp(0xFF1D1215, Colors.ACCENT_DIM, closeHover));
 		g.textCentered("x", bx + bs / 2, by + 6, Colors.lerp(Colors.TEXT_DIM, WHITE, closeHover), true);
-		if (hov && clicked) onClose();
+		hit(bx, by, bs, bs, this::onClose);
 
-		// enable / disable all (for the current tab)
-		boolean anyOff = false;
-		for (Module m : mods) if (!m.isEnabled()) anyOff = true;
+		final boolean anyOff = mods.stream().anyMatch(m -> !m.isEnabled());
 		String label = anyOff ? "Enable all" : "Disable all";
 		int w = g.width(label, true) + 18, h = 20, x = bx - 8 - w, y = by;
-		boolean h2 = interactive && in(mx, my, x, y, w, h);
+		boolean h2 = live && in(mx, my, x, y, w, h);
 		bulkHover = Anim.approach(bulkHover, h2 ? 1f : 0f, 18f, dt);
 		g.roundBordered(x, y, w, h, 6, Colors.lerp(0xFF1D1215, 0xFF2E1519, bulkHover), Colors.lerp(Colors.BORDER, Colors.ACCENT_DIM, bulkHover));
 		g.textCentered(label, x + w / 2, y + 6, Colors.lerp(Colors.TEXT_DIM, Colors.TEXT, bulkHover), true);
-		if (h2 && clicked) {
+		hit(x, y, w, h, () -> {
 			for (Module m : mods) { m.setEnabled(anyOff); m.uiFlash = 1f; }
 			if (anyOff) Sounds.toggleOn(); else Sounds.toggleOff();
 			ModuleManager.save();
-		}
+		});
 	}
 
-	private void drawCards(Gfx g, List<Module> mods, double mx, double my, float dt, long now, boolean interactive, boolean clicked, int maxScroll) {
+	private void drawCards(Gfx g, List<Module> mods, double mx, double my, float dt, long now, boolean live, int maxScroll) {
 		float baseAlpha = g.alpha();
 		g.scissor(cx - 6, cy, cw + 12, ch);
 		boolean mouseInArea = in(mx, my, cx, cy, cw, ch);
@@ -207,12 +269,11 @@ public class ModMenuScreen extends Screen {
 			int yy = y + Math.round((1f - t) * 12f);
 			g.setAlpha(baseAlpha * t);
 
-			boolean hov = interactive && mouseInArea && in(mx, my, x, y, cardW, CARD_H);
+			boolean hov = live && mouseInArea && in(mx, my, x, y, cardW, CARD_H);
 			m.uiHover = Anim.approach(m.uiHover, hov ? 1f : 0f, 16f, dt);
 			m.uiToggle = Anim.approach(m.uiToggle, m.isEnabled() ? 1f : 0f, 14f, dt);
 			m.uiFlash = Anim.approach(m.uiFlash, 0f, 7f, dt);
 
-			// glow when enabled
 			if (m.uiToggle > 0.02f) {
 				g.round(x - 2, yy - 2, cardW + 4, CARD_H + 4, 10, Colors.mulAlpha(Colors.ACCENT, 0.07f * m.uiToggle));
 				g.round(x - 1, yy - 1, cardW + 2, CARD_H + 2, 9, Colors.mulAlpha(Colors.ACCENT, 0.10f * m.uiToggle));
@@ -222,29 +283,28 @@ public class ModMenuScreen extends Screen {
 			int border = Colors.lerp(Colors.lerp(Colors.BORDER, 0xFF55303A, m.uiHover), Colors.ACCENT_DIM, m.uiToggle);
 			g.roundBordered(x, yy, cardW, CARD_H, 8, fill, border);
 			g.rect(x + 8, yy + 1, cardW - 16, 1, Colors.mulAlpha(WHITE, 0.05f + 0.04f * m.uiHover));
-			g.round(x + 1, yy + 12, 3, Math.round(CARD_H - 24) , 1, Colors.mulAlpha(Colors.ACCENT, m.uiToggle));
+			g.round(x + 1, yy + 12, 3, CARD_H - 24, 1, Colors.mulAlpha(Colors.ACCENT, m.uiToggle));
 
 			int sw = 26, sh = 13, sx = x + cardW - sw - 10, sy = yy + 10;
 			g.text(g.fit(m.name, cardW - sw - 34, true), x + 12, yy + 10, Colors.lerp(0xFFE6DCDE, Colors.TEXT, m.uiToggle), true);
 			g.text(g.fit(m.description, cardW - 24, false), x + 12, yy + 25, Colors.TEXT_DIM, false);
 
-			// status + category line
 			String status = m.isEnabled() ? "ENABLED" : "DISABLED";
 			g.textScaled(status, x + 12, yy + 39, 0.75f, Colors.lerp(0xFF6E6064, Colors.ACCENT, m.uiToggle), true);
 			String cat = m.category.label.toUpperCase();
 			g.textScaled(cat, x + cardW - 10 - g.width(cat, false) * 0.75f, yy + 39, 0.75f, 0xFF6E6064, false);
 
-			// switch
 			g.round(sx, sy, sw, sh, 6, Colors.lerp(Colors.TRACK_OFF, Colors.ACCENT, m.uiToggle));
 			int knob = sx + 2 + Math.round((sw - sh) * m.uiToggle);
 			g.round(knob, sy + 2, sh - 4, sh - 4, 4, Colors.lerp(0xFFB9ADB0, WHITE, m.uiToggle));
 
-			if (hov && clicked) {
-				m.toggle();
-				m.uiFlash = 1f;
-				if (m.isEnabled()) Sounds.toggleOn(); else Sounds.toggleOff();
+			final Module mod = m;
+			hits.add(new Hit(x, y, cardW, CARD_H, cx - 6, cy, cw + 12, ch, () -> {
+				mod.toggle();
+				mod.uiFlash = 1f;
+				if (mod.isEnabled()) Sounds.toggleOn(); else Sounds.toggleOff();
 				ModuleManager.save();
-			}
+			}));
 		}
 		g.setAlpha(baseAlpha);
 		g.endScissor();
@@ -255,11 +315,5 @@ public class ModMenuScreen extends Screen {
 			g.round(cx + cw + 6, cy, 3, trackH, 1, 0xFF1F1417);
 			g.round(cx + cw + 6, thumbY, 3, thumbH, 1, Colors.ACCENT_DIM);
 		}
-	}
-
-	// no @Override: if the signature ever changes only wheel scrolling would stop
-	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-		scrollTarget -= (float) (scrollY * 30);
-		return true;
 	}
 }
