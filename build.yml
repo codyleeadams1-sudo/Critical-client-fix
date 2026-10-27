@@ -1,0 +1,50 @@
+name: Build Critical Client
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.5.0
+
+      - name: Build
+        run: gradle build --no-daemon
+
+      - name: Collect jar
+        run: |
+          mkdir dist
+          for f in build/libs/*.jar; do case "$f" in *sources*) ;; *) cp "$f" dist/ ;; esac; done
+          ls -la dist
+
+      - name: Upload jar (Actions artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: criticalclient-jar
+          path: dist/*.jar
+
+      - name: Publish release with jar
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Critical Client build ${{ github.run_number }}
+          files: dist/*.jar
