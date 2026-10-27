@@ -49,6 +49,10 @@ public class ModMenuScreen extends Screen {
 	private int tab = 0;
 	private float tabY = -1, scroll, scrollTarget, closeHover, bulkHover;
 	private float lastScale = 1f, lastOffY = 0f, lastP = 0f;
+	private int lastMouseX, lastMouseY, sel = -1;
+	private boolean prevDown, polledOnce;
+	private long lastClickNs;
+	private String dbg = "no input yet";
 
 	private int px, py, pw, ph, sideW, cx, cy, cw, ch, cols, cardW;
 
@@ -75,20 +79,61 @@ public class ModMenuScreen extends Screen {
 		return false;
 	}
 
+	/** Runs a click at screen coords; returns true if a button was hit. De-duplicates the event and poll paths. */
+	private boolean doClick(double sx, double sy, String src) {
+		long now = System.nanoTime();
+		if (now - lastClickNs < 150_000_000L) return true;
+		boolean hit = handleClick(sx, sy);
+		if (hit) lastClickNs = now;
+		dbg = src + " (" + (int) sx + "," + (int) sy + ") " + (hit ? "HIT" : "miss") + "  hits=" + hits.size();
+		return hit;
+	}
+
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-		if (event.button() == 0 && handleClick(event.x(), event.y())) return true;
+		// use the same mouse position the menu draws with, so hover and click always agree
+		if (event.button() == 0 && doClick(lastMouseX, lastMouseY, "event")) return true;
 		return super.mouseClicked(event, doubleClick);
 	}
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
+		int k = event.key();
 		// Right Shift closes (ignore the first moment so the key that opened the menu can't close it again)
-		if (event.key() == Input.KEY_RIGHT_SHIFT && openedAt != 0 && System.nanoTime() - openedAt > 450_000_000L) {
+		if (k == Input.KEY_RIGHT_SHIFT && openedAt != 0 && System.nanoTime() - openedAt > 450_000_000L) {
 			onClose();
 			return true;
 		}
+		List<Module> mods = visible();
+		if (!mods.isEmpty()) {
+			int n = mods.size();
+			if (k == 262) { sel = sel < 0 ? 0 : Math.min(n - 1, sel + 1); keepSelVisible(); return true; }          // right
+			if (k == 263) { sel = sel < 0 ? 0 : Math.max(0, sel - 1); keepSelVisible(); return true; }               // left
+			if (k == 264) { sel = sel < 0 ? 0 : Math.min(n - 1, sel + cols); keepSelVisible(); return true; }        // down
+			if (k == 265) { sel = sel < 0 ? 0 : Math.max(0, sel - cols); keepSelVisible(); return true; }            // up
+			if ((k == 257 || k == 32 || k == 335) && sel >= 0 && sel < n) {                                         // enter / space
+				Module m = mods.get(sel);
+				m.toggle(); m.uiFlash = 1f;
+				if (m.isEnabled()) Sounds.toggleOn(); else Sounds.toggleOff();
+				ModuleManager.save();
+				dbg = "key toggle " + m.name;
+				return true;
+			}
+		}
+		if (k == 258) {                                                                                             // tab: next category
+			tab = (tab + 1) % TAB_NAMES.length; sel = -1; scrollTarget = 0; scroll = 0;
+			tabChangedAt = System.nanoTime(); Sounds.tab();
+			return true;
+		}
 		return super.keyPressed(event);
+	}
+
+	private void keepSelVisible() {
+		if (sel < 0) return;
+		int row = sel / Math.max(1, cols);
+		int top = row * (CARD_H + GAP), bottom = top + CARD_H;
+		if (top < scrollTarget) scrollTarget = top;
+		else if (bottom > scrollTarget + ch) scrollTarget = bottom - ch;
 	}
 
 	// no @Override: if the signature ever changes only wheel scrolling would stop
@@ -131,6 +176,7 @@ public class ModMenuScreen extends Screen {
 		lastFrame = now;
 		layout();
 		hits.clear();
+		lastMouseX = mouseX; lastMouseY = mouseY;
 
 		float p = closing ? 1f - Anim.easeInCubic((now - closeAt) / (float) CLOSE_NS) : Anim.easeOutCubic((now - openedAt) / (float) OPEN_NS);
 		float scale = 0.94f + 0.06f * p, offY = 16f * (1f - p);
@@ -169,7 +215,16 @@ public class ModMenuScreen extends Screen {
 		drawHeader(g, mx, my, dt, live, mods);
 		drawCards(g, mods, mx, my, dt, now, live, maxScroll);
 
+		// debug line
+		g.textScaled(dbg, px + sideW + 16, py + ph - 10, 0.7f, 0xFF5E5155, false);
+
 		g.pop();
+
+		// backup path: watch the left mouse button directly (de-duplicated with the event path)
+		boolean down = Input.mouseLeftDown();
+		if (!polledOnce) { prevDown = down; polledOnce = true; }
+		if (down && !prevDown) doClick(mouseX, mouseY, "poll");
+		prevDown = down;
 
 		if (closing && now - closeAt >= CLOSE_NS) super.onClose();
 	}
@@ -231,7 +286,7 @@ public class ModMenuScreen extends Screen {
 		String title = tab == 0 ? "All Modules" : TAB_NAMES[tab] + " Modules";
 		g.text(title, cx, py + 13, Colors.TEXT, true);
 		g.round(cx, py + 27, 22, 2, 1, Colors.ACCENT);
-		g.textScaled(mods.size() + (mods.size() == 1 ? " module" : " modules") + "  -  click a card to toggle", cx + 28, py + 26, 0.8f, Colors.TEXT_DIM, false);
+		g.textScaled(mods.size() + (mods.size() == 1 ? " module" : " modules") + "  -  click a card, or arrows + Enter", cx + 28, py + 26, 0.8f, Colors.TEXT_DIM, false);
 
 		int bs = 20, bx = px + pw - bs - 12, by = py + 11;
 		boolean hov = live && in(mx, my, bx, by, bs, bs);
@@ -274,6 +329,7 @@ public class ModMenuScreen extends Screen {
 			m.uiToggle = Anim.approach(m.uiToggle, m.isEnabled() ? 1f : 0f, 14f, dt);
 			m.uiFlash = Anim.approach(m.uiFlash, 0f, 7f, dt);
 
+			if (i == sel) g.round(x - 3, yy - 3, cardW + 6, CARD_H + 6, 11, Colors.mulAlpha(WHITE, 0.55f));
 			if (m.uiToggle > 0.02f) {
 				g.round(x - 2, yy - 2, cardW + 4, CARD_H + 4, 10, Colors.mulAlpha(Colors.ACCENT, 0.07f * m.uiToggle));
 				g.round(x - 1, yy - 1, cardW + 2, CARD_H + 2, 9, Colors.mulAlpha(Colors.ACCENT, 0.10f * m.uiToggle));

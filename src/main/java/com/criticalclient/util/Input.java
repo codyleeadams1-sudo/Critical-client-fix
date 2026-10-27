@@ -50,6 +50,11 @@ public final class Input {
 					}
 				}
 			}
+			if (winHandle == null) {
+				for (Method m : w.getClass().getMethods()) {
+					if (m.getParameterCount() == 0 && m.getReturnType() == long.class) { winHandle = m; break; }
+				}
+			}
 			return winHandle == null ? 0L : (long) winHandle.invoke(w);
 		} catch (Throwable t) { return 0L; }
 	}
@@ -66,9 +71,22 @@ public final class Input {
 		mouseResolved = true;
 		try {
 			Minecraft mc = Minecraft.getInstance();
-			Field f = Minecraft.class.getField("mouseHandler");
-			mouseHandler = f.get(mc);
-			isLeftPressed = mouseHandler.getClass().getMethod("isLeftPressed");
+			for (Field f : Minecraft.class.getDeclaredFields()) {
+				if (f.getType().getSimpleName().equals("MouseHandler")) {
+					f.setAccessible(true);
+					mouseHandler = f.get(mc);
+					break;
+				}
+			}
+			if (mouseHandler != null) {
+				for (Method m : mouseHandler.getClass().getDeclaredMethods()) {
+					if (m.getName().equals("isLeftPressed") && m.getParameterCount() == 0) {
+						m.setAccessible(true);
+						isLeftPressed = m;
+						break;
+					}
+				}
+			}
 		} catch (Throwable ignored) {}
 	}
 
