@@ -9,7 +9,7 @@ public abstract class Module {
 	private boolean enabled;
 
 	// GUI animation state
-	public float uiHover, uiToggle;
+	public float uiHover, uiToggle, uiFlash;
 
 	protected Module(String id, String name, String description, Category category, boolean defaultOn) {
 		this.id = id; this.name = name; this.description = description; this.category = category;

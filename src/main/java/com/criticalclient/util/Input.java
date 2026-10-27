@@ -17,7 +17,10 @@ public final class Input {
 	public static final int KEY_C = 67;
 	private static final int GLFW_PRESS = 1;
 
-	private static Method getContext, getMouseButton, getKey;
+	private static Method getMouseButton, getKey;
+	private static Method winHandle, isLeftPressed;
+	private static Object mouseHandler;
+	private static boolean mouseResolved;
 	private static Method screenMethod;
 	private static Field screenField;
 	private static boolean screenResolved;
@@ -25,7 +28,6 @@ public final class Input {
 	static {
 		try {
 			Class<?> glfw = Class.forName("org.lwjgl.glfw.GLFW");
-			getContext = glfw.getMethod("glfwGetCurrentContext");
 			getMouseButton = glfw.getMethod("glfwGetMouseButton", long.class, int.class);
 			getKey = glfw.getMethod("glfwGetKey", long.class, int.class);
 		} catch (Throwable t) {
@@ -35,14 +37,49 @@ public final class Input {
 
 	private Input() {}
 
+	/** Window handle from the Window object (glfwGetCurrentContext can be 0 off the render thread in 26.x). */
+	private static long windowHandle() {
+		try {
+			Object w = Minecraft.getInstance().getWindow();
+			if (winHandle == null) {
+				for (Method m : w.getClass().getMethods()) {
+					if (m.getParameterCount() == 0 && m.getReturnType() == long.class
+							&& (m.getName().equals("handle") || m.getName().equals("getWindow") || m.getName().equals("window"))) {
+						winHandle = m;
+						break;
+					}
+				}
+			}
+			return winHandle == null ? 0L : (long) winHandle.invoke(w);
+		} catch (Throwable t) { return 0L; }
+	}
+
 	private static int poll(Method m, int arg) {
 		try {
-			long win = (long) getContext.invoke(null);
+			long win = windowHandle();
+			if (win == 0L) return 0;
 			return (int) m.invoke(null, win, arg);
 		} catch (Throwable t) { return 0; }
 	}
 
-	public static boolean mouseLeftDown() { return getMouseButton != null && poll(getMouseButton, 0) == GLFW_PRESS; }
+	private static void resolveMouse() {
+		mouseResolved = true;
+		try {
+			Minecraft mc = Minecraft.getInstance();
+			Field f = Minecraft.class.getField("mouseHandler");
+			mouseHandler = f.get(mc);
+			isLeftPressed = mouseHandler.getClass().getMethod("isLeftPressed");
+		} catch (Throwable ignored) {}
+	}
+
+	public static boolean mouseLeftDown() {
+		if (!mouseResolved) resolveMouse();
+		try {
+			if (isLeftPressed != null) return (boolean) isLeftPressed.invoke(mouseHandler);
+		} catch (Throwable ignored) {}
+		return getMouseButton != null && poll(getMouseButton, 0) == GLFW_PRESS;
+	}
+
 	public static boolean keyDown(int key) { return getKey != null && poll(getKey, key) == GLFW_PRESS; }
 
 	// ---- current screen ----
@@ -77,7 +114,7 @@ public final class Input {
 			for (Constructor<?> c : KeyMapping.class.getConstructors()) {
 				Class<?>[] p = c.getParameterTypes();
 				if (p.length == 4 && p[0] == String.class && p[1].isEnum() && p[2] == int.class && p[3] == KeyMapping.Category.class) {
-					Object type = p[1].getEnumConstants()[0]; // KEYSYM is the first constant
+					Object type = p[1].getEnumConstants()[0];
 					return (KeyMapping) c.newInstance(name, type, code, category);
 				}
 			}
