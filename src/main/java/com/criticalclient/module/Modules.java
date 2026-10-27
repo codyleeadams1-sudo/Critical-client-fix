@@ -3,6 +3,7 @@ package com.criticalclient.module;
 import com.criticalclient.CriticalClient;
 import com.criticalclient.util.Colors;
 import com.criticalclient.util.Gfx;
+import com.criticalclient.util.Input;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.util.Mth;
@@ -47,7 +48,7 @@ public final class Modules {
 
 		@Override public void onTick(Minecraft mc) {
 			var fov = mc.options.fov();
-			boolean want = CriticalClient.ZOOM_KEY != null && CriticalClient.ZOOM_KEY.isDown() && mc.screen == null;
+			boolean want = CriticalClient.ZOOM_KEY != null && CriticalClient.ZOOM_KEY.isDown() && Input.noScreen(mc);
 			if (want && original == null) original = fov.get();
 			if (original == null) return;
 			int target = want ? 30 : original;
@@ -73,7 +74,7 @@ public final class Modules {
 
 		@Override public void onTick(Minecraft mc) {
 			if (mc.player == null) { forced = false; return; }
-			boolean forward = mc.options.keyUp.isDown() && mc.screen == null;
+			boolean forward = mc.options.keyUp.isDown() && Input.noScreen(mc);
 			if (forward) { mc.options.keySprint.setDown(true); forced = true; }
 			else if (forced) { mc.options.keySprint.setDown(false); forced = false; }
 		}

@@ -3,7 +3,7 @@ package com.criticalclient;
 import com.criticalclient.gui.ModMenuScreen;
 import com.criticalclient.module.ModuleManager;
 import com.criticalclient.util.Gfx;
-import com.mojang.blaze3d.platform.InputConstants;
+import com.criticalclient.util.Input;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -13,7 +13,6 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.resources.Identifier;
-import org.lwjgl.glfw.GLFW;
 
 import java.lang.reflect.Method;
 
@@ -25,17 +24,15 @@ public class CriticalClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MOD_ID, "main"));
-		OPEN_KEY = KeyMappingHelper.registerKeyMapping(new KeyMapping(
-			"key.criticalclient.open_menu", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_SHIFT, category));
-		ZOOM_KEY = KeyMappingHelper.registerKeyMapping(new KeyMapping(
-			"key.criticalclient.zoom", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_C, category));
+		OPEN_KEY = KeyMappingHelper.registerKeyMapping(Input.newKey("key.criticalclient.open_menu", Input.KEY_RIGHT_SHIFT, category));
+		ZOOM_KEY = KeyMappingHelper.registerKeyMapping(Input.newKey("key.criticalclient.zoom", Input.KEY_C, category));
 
 		ModuleManager.load();
 
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
 			ModuleManager.tick(mc);
 			while (OPEN_KEY.consumeClick()) {
-				if (mc.screen == null) openScreen(mc, new ModMenuScreen());
+				if (Input.noScreen(mc)) openScreen(mc, new ModMenuScreen());
 			}
 		});
 

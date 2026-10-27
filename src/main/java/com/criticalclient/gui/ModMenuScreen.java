@@ -6,11 +6,11 @@ import com.criticalclient.module.ModuleManager;
 import com.criticalclient.util.Anim;
 import com.criticalclient.util.Colors;
 import com.criticalclient.util.Gfx;
+import com.criticalclient.util.Input;
 import com.criticalclient.util.Sounds;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -79,9 +79,8 @@ public class ModMenuScreen extends Screen {
 		boolean interactive = !closing && p > 0.95f;
 
 		// ---- input (polled so it works regardless of event API changes)
-		long win = GLFW.glfwGetCurrentContext();
-		boolean down = GLFW.glfwGetMouseButton(win, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
-		boolean shift = GLFW.glfwGetKey(win, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS;
+		boolean down = Input.mouseLeftDown();
+		boolean shift = Input.keyDown(Input.KEY_RIGHT_SHIFT);
 		if (!inputInit) { prevMouse = down; prevShift = shift; inputInit = true; }
 		boolean clicked = down && !prevMouse;
 		if (shift && !prevShift) onClose();
