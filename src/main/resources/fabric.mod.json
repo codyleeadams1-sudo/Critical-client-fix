@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "criticalclient",
+  "version": "${version}",
+  "name": "Critical Client",
+  "description": "A clean, red-themed survival QoL client with a modern module menu. Press Right Shift in game.",
+  "authors": ["Critical"],
+  "license": "MIT",
+  "icon": "assets/criticalclient/icon.png",
+  "environment": "client",
+  "entrypoints": { "client": ["com.criticalclient.CriticalClient"] },
+  "depends": {
+    "fabricloader": ">=0.19.0",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
